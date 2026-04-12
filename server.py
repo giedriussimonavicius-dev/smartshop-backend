@@ -1,10 +1,9 @@
 """
-SmartShop Backend API v3.1
-Fixed for Python 3.14 compatibility
+SmartShop Backend API v3.2
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, json, time, hashlib
+import os, json, time, hashlib, urllib.request
 from functools import wraps
 from dotenv import load_dotenv
 
@@ -49,31 +48,31 @@ def rate_limit(f):
     return decorated
 
 AFFILIATE = {
-    "varle.lt":       "https://varle.lt/search/?q={query}",
-    "pigu.lt":        "https://pigu.lt/lt/search?query={query}",
-    "euronics.lt":    "https://euronics.lt/paieska?q={query}",
-    "senukai.lt":     "https://senukai.lt/paieska?q={query}",
-    "1a.lt":          "https://1a.lt/search?q={query}",
-    "skytech.lt":     "https://skytech.lt/search?q={query}",
-    "amazon.de":      "https://www.amazon.de/s?k={query}",
-    "ebay.com":       "https://www.ebay.com/sch/i.html?_nkw={query}",
-    "idealo.de":      "https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}",
-    "pricerunner.com":"https://www.pricerunner.com/search?q={query}",
-    "notino.com":     "https://www.notino.lt/search/?phrase={query}",
+    "varle.lt":        "https://varle.lt/search/?q={query}",
+    "pigu.lt":         "https://pigu.lt/lt/search?query={query}",
+    "euronics.lt":     "https://euronics.lt/paieska?q={query}",
+    "senukai.lt":      "https://senukai.lt/paieska?q={query}",
+    "1a.lt":           "https://1a.lt/search?q={query}",
+    "skytech.lt":      "https://skytech.lt/search?q={query}",
+    "amazon.de":       "https://www.amazon.de/s?k={query}",
+    "ebay.com":        "https://www.ebay.com/sch/i.html?_nkw={query}",
+    "idealo.de":       "https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}",
+    "pricerunner.com": "https://www.pricerunner.com/search?q={query}",
+    "notino.com":      "https://www.notino.lt/search/?phrase={query}",
 }
 
 SHOPS = [
-    {"id": "varle",       "name": "Varle.lt",     "flag": "🇱🇹", "url": "varle.lt"},
-    {"id": "pigu",        "name": "Pigu.lt",       "flag": "🇱🇹", "url": "pigu.lt"},
-    {"id": "euronics",    "name": "Euronics",      "flag": "🇱🇹", "url": "euronics.lt"},
-    {"id": "senukai",     "name": "Senukai",       "flag": "🇱🇹", "url": "senukai.lt"},
-    {"id": "1a",          "name": "1a.lt",         "flag": "🇱🇹", "url": "1a.lt"},
-    {"id": "skytech",     "name": "Skytech",       "flag": "🇱🇹", "url": "skytech.lt"},
-    {"id": "amazon",      "name": "Amazon",        "flag": "🌍",  "url": "amazon.de"},
-    {"id": "ebay",        "name": "eBay",          "flag": "🌍",  "url": "ebay.com"},
-    {"id": "idealo",      "name": "Idealo",        "flag": "🇩🇪", "url": "idealo.de"},
-    {"id": "pricerunner", "name": "PriceRunner",   "flag": "🇸🇪", "url": "pricerunner.com"},
-    {"id": "notino",      "name": "Notino",        "flag": "🇨🇿", "url": "notino.com"},
+    {"id": "varle",        "name": "Varle.lt",      "flag": "🇱🇹", "url": "varle.lt"},
+    {"id": "pigu",         "name": "Pigu.lt",        "flag": "🇱🇹", "url": "pigu.lt"},
+    {"id": "euronics",     "name": "Euronics",       "flag": "🇱🇹", "url": "euronics.lt"},
+    {"id": "senukai",      "name": "Senukai",        "flag": "🇱🇹", "url": "senukai.lt"},
+    {"id": "1a",           "name": "1a.lt",          "flag": "🇱🇹", "url": "1a.lt"},
+    {"id": "skytech",      "name": "Skytech",        "flag": "🇱🇹", "url": "skytech.lt"},
+    {"id": "amazon",       "name": "Amazon",         "flag": "🌍",  "url": "amazon.de"},
+    {"id": "ebay",         "name": "eBay",           "flag": "🌍",  "url": "ebay.com"},
+    {"id": "idealo",       "name": "Idealo",         "flag": "🇩🇪", "url": "idealo.de"},
+    {"id": "pricerunner",  "name": "PriceRunner",    "flag": "🇸🇪", "url": "pricerunner.com"},
+    {"id": "notino",       "name": "Notino",         "flag": "🇨🇿", "url": "notino.com"},
 ]
 
 def build_affiliate_url(shop_url, query):
@@ -90,33 +89,88 @@ def build_prompt(query, shops):
 PRODUCT: "{query}"
 SHOPS: {shop_str}
 
-Search for real current prices. Use web_search to find:
+Use web_search to find real current prices:
 - "{query} kaina pigu.lt"
-- "{query} price amazon.de"  
-- "{query} varle.lt"
+- "{query} price amazon.de"
+- "{query} varle.lt kaina"
 
-IMPORTANT: For each result, put the DIRECT product page URL in "url" field (not search page).
-If you find exact price from search results, use it. If estimated, set source="estimated".
-verdict_label must be in Lithuanian: "Pirkti dabar" / "Palaukti" / "Vengti" / "Normalu"
+RULES:
+- Put DIRECT product page URL in "url" field when found
+- Use exact prices from search results, not estimates
+- If price not found for a shop, skip it (don't include with fake price)
+- verdict_label in Lithuanian: "Pirkti dabar" / "Palaukti" / "Vengti" / "Normalu"
+- All text fields in Lithuanian
 
-Return ONLY this JSON (no markdown):
-{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"1-2 sentences in Lithuanian","ai_summary":"3-4 sentences in Lithuanian","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"results":[{{"shop":"","shop_id":"","flag":"","url":"DIRECT product URL if found, else search URL","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"review_count":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search or estimated"}}]}}
-
-JSON ONLY."""
+Return ONLY valid JSON (no markdown, no extra text):
+{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"","ai_summary":"","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"results":[{{"shop":"","flag":"","url":"","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search"}}]}}"""
 
 def call_anthropic(prompt):
-    """Call Anthropic API using raw HTTP to avoid Python version issues."""
-    import urllib.request
-    
     messages = [{"role": "user", "content": prompt}]
-    
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+    }
+
+    def do_request(msgs, timeout):
+        payload = json.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 4000,
+            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+            "messages": msgs
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    data = do_request(messages, 60)
+
+    if data.get("stop_reason") == "tool_use":
+        tool_results = [
+            {"type": "tool_result", "tool_use_id": b["id"], "content": "Search completed."}
+            for b in data["content"] if b.get("type") == "tool_use"
+        ]
+        messages.append({"role": "assistant", "content": data["content"]})
+        messages.append({"role": "user", "content": tool_results})
+        data = do_request(messages, 90)
+
+    return "".join(
+        b.get("text", "") for b in data.get("content", [])
+        if b.get("type") == "text"
+    )
+
+def call_anthropic_vision(image_b64):
+    """Dedicated vision call for image analysis."""
+    prompt_text = """Analyze this image carefully and identify:
+
+1. PRODUCT: What product/item is shown? Give exact brand, model, name.
+2. PRICE TAG: Is there any price label, price sticker, or price display visible?
+   - If YES: What is the EXACT price shown? (numbers only, e.g. 299.99)
+   - If NO: Return 0 for price_visible
+3. BARCODE: Is there a barcode or QR code? If yes, what number is shown?
+
+Be very precise. Do NOT guess prices. Only report prices you can clearly see.
+
+Return ONLY this JSON:
+{"product_name":"exact brand and model","price_visible":0,"barcode":"","brand":"","model":"","context":"what you see in the image"}
+
+Rules:
+- price_visible must be 0 if no price is clearly visible
+- price_visible must be the exact number shown if a price label is visible
+- Do not hallucinate prices"""
+
     payload = json.dumps({
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 4000,
-        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-        "messages": messages
+        "max_tokens": 500,
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
+            {"type": "text", "text": prompt_text}
+        ]}]
     }).encode("utf-8")
-    
+
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
         data=payload,
@@ -127,46 +181,10 @@ def call_anthropic(prompt):
         },
         method="POST"
     )
-    
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    
-    # Handle tool use - continue conversation
-    if data.get("stop_reason") == "tool_use":
-        tool_results = [
-            {"type": "tool_result", "tool_use_id": b["id"], "content": "Search completed."}
-            for b in data["content"] if b.get("type") == "tool_use"
-        ]
-        
-        messages.append({"role": "assistant", "content": data["content"]})
-        messages.append({"role": "user", "content": tool_results})
-        
-        payload2 = json.dumps({
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 4000,
-            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-            "messages": messages
-        }).encode("utf-8")
-        
-        req2 = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload2,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST"
-        )
-        
-        with urllib.request.urlopen(req2, timeout=90) as resp2:
-            data = json.loads(resp2.read().decode("utf-8"))
-    
-    text = "".join(
-        b.get("text", "") for b in data.get("content", [])
-        if b.get("type") == "text"
-    )
-    return text
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read().decode("utf-8"))
+
+    return "".join(b.get("text","") for b in data.get("content",[]) if b.get("type")=="text")
 
 def parse_response(text, query):
     s = text.strip()
@@ -227,30 +245,31 @@ def search():
     shop_ids = data.get("shops", [s["id"] for s in SHOPS])
     if not query:
         return jsonify({"error": "Query required"}), 400
-    
+
     cache_key = hashlib.md5(f"{query}:{sorted(shop_ids)}".encode()).hexdigest()
     cached = get_cache(cache_key)
     if cached:
         cached["_cached"] = True
         return jsonify(cached)
-    
+
     shops = [s for s in SHOPS if s["id"] in shop_ids] or SHOPS
-    
     if not ANTHROPIC_API_KEY:
         return jsonify({"error": "Server not configured"}), 500
-    
+
     try:
-        prompt = build_prompt(query, shops)
-        text = call_anthropic(prompt)
+        text = call_anthropic(build_prompt(query, shops))
         result = parse_response(text, query)
         result = post_process(result, query)
         set_cache(cache_key, result)
-        
+
         ip = request.remote_addr or "unknown"
         today = time.strftime("%Y-%m-%d")
         used = rate_store.get(ip, {}).get("count", 1)
-        result["_rate"] = {"used": used, "limit": DAILY_FREE_LIMIT, "remaining": max(0, DAILY_FREE_LIMIT - used)}
-        
+        result["_rate"] = {
+            "used": used,
+            "limit": DAILY_FREE_LIMIT,
+            "remaining": max(0, DAILY_FREE_LIMIT - used)
+        }
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": "server_error", "message": str(e)}), 500
@@ -258,31 +277,20 @@ def search():
 @app.route("/api/scan-image", methods=["POST"])
 @rate_limit
 def scan_image():
-    import urllib.request
     data = request.get_json()
     if not data or "image" not in data:
         return jsonify({"error": "No image"}), 400
-    
-    payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 300,
-        "messages": [{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data["image"]}},
-            {"type": "text", "text": "Look carefully at this image. Find: product name/model, any visible price tag or price label, any barcode. Return JSON only: {\"product_name\":\"exact product name and model\",\"price_visible\":0,\"barcode\":\"\",\"brand\":\"\",\"context\":\"brief description of what you see\"}. If no price visible set price_visible to 0. Be precise."}
-        ]}]
-    }).encode("utf-8")
-    
+
     try:
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-        text = "".join(b.get("text","") for b in d.get("content",[]) if b.get("type")=="text")
-        return jsonify(parse_response(text, ""))
+        text = call_anthropic_vision(data["image"])
+        result = parse_response(text, "")
+
+        # Validate price - only return if clearly visible (> 1 and reasonable)
+        price = result.get("price_visible", 0)
+        if isinstance(price, (int, float)) and price <= 1:
+            result["price_visible"] = 0
+
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -290,7 +298,7 @@ def scan_image():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "3.1",
+        "version": "3.2",
         "api_configured": bool(ANTHROPIC_API_KEY),
         "cache_entries": len(cache),
         "rate_store_size": len(rate_store)
@@ -305,6 +313,6 @@ def rate_limit_status():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    print(f"SmartShop API v3.1 on http://localhost:{port}")
+    print(f"SmartShop API v3.2 on http://localhost:{port}")
     print(f"API key: {'configured' if ANTHROPIC_API_KEY else 'MISSING'}")
     app.run(host="0.0.0.0", port=port, debug=True)
