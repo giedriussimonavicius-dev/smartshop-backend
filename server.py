@@ -49,15 +49,17 @@ def rate_limit(f):
     return decorated
 
 AFFILIATE = {
-    "varle.lt":      "https://varle.lt/search/?q={query}&ref=smartshop",
-    "pigu.lt":       "https://pigu.lt/lt/search?query={query}",
-    "euronics.lt":   "https://euronics.lt/paieska?q={query}",
-    "senukai.lt":    "https://senukai.lt/search?q={query}",
-    "1a.lt":         "https://1a.lt/search?q={query}",
-    "amazon.de":     "https://www.amazon.de/s?k={query}&tag=smartshop-21",
-    "ebay.com":      "https://www.ebay.com/sch/i.html?_nkw={query}",
-    "idealo.de":     "https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}",
+    "varle.lt":       "https://varle.lt/search/?q={query}",
+    "pigu.lt":        "https://pigu.lt/lt/search?query={query}",
+    "euronics.lt":    "https://euronics.lt/paieska?q={query}",
+    "senukai.lt":     "https://senukai.lt/paieska?q={query}",
+    "1a.lt":          "https://1a.lt/search?q={query}",
+    "skytech.lt":     "https://skytech.lt/search?q={query}",
+    "amazon.de":      "https://www.amazon.de/s?k={query}",
+    "ebay.com":       "https://www.ebay.com/sch/i.html?_nkw={query}",
+    "idealo.de":      "https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}",
     "pricerunner.com":"https://www.pricerunner.com/search?q={query}",
+    "notino.com":     "https://www.notino.lt/search/?phrase={query}",
 }
 
 SHOPS = [
@@ -93,8 +95,12 @@ Search for real current prices. Use web_search to find:
 - "{query} price amazon.de"  
 - "{query} varle.lt"
 
+IMPORTANT: For each result, put the DIRECT product page URL in "url" field (not search page).
+If you find exact price from search results, use it. If estimated, set source="estimated".
+verdict_label must be in Lithuanian: "Pirkti dabar" / "Palaukti" / "Vengti" / "Normalu"
+
 Return ONLY this JSON (no markdown):
-{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"","ai_summary":"","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"results":[{{"shop":"","shop_id":"","flag":"","url":"","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"review_count":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search"}}]}}
+{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"1-2 sentences in Lithuanian","ai_summary":"3-4 sentences in Lithuanian","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"results":[{{"shop":"","shop_id":"","flag":"","url":"DIRECT product URL if found, else search URL","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"review_count":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search or estimated"}}]}}
 
 JSON ONLY."""
 
@@ -262,7 +268,7 @@ def scan_image():
         "max_tokens": 300,
         "messages": [{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data["image"]}},
-            {"type": "text", "text": "Return JSON only: {\"product_name\":\"name\",\"price_visible\":0,\"barcode\":\"\",\"context\":\"description\"}"}
+            {"type": "text", "text": "Look carefully at this image. Find: product name/model, any visible price tag or price label, any barcode. Return JSON only: {\"product_name\":\"exact product name and model\",\"price_visible\":0,\"barcode\":\"\",\"brand\":\"\",\"context\":\"brief description of what you see\"}. If no price visible set price_visible to 0. Be precise."}
         ]}]
     }).encode("utf-8")
     
