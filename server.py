@@ -84,25 +84,26 @@ def build_affiliate_url(shop_url, query):
 
 def build_prompt(query, shops):
     shop_str = ", ".join([f"{s['name']} ({s['url']})" for s in shops])
-    return f"""You are SmartShop AI — a price intelligence engine.
+    return f"""You are SmartShop AI — a price intelligence engine with review analysis.
 
 PRODUCT: "{query}"
 SHOPS: {shop_str}
 
-Use web_search to find real current prices:
-- "{query} kaina pigu.lt"
-- "{query} price amazon.de"
-- "{query} varle.lt kaina"
+Use web_search to find:
+1. PRICES: Search "{query} kaina pigu.lt", "{query} price amazon.de", "{query} varle.lt kaina"
+2. REVIEWS: Search "{query} atsiliepimai", "{query} review 2024", "{query} pros cons"
+3. RATING: Find average user rating from review sites, Amazon, etc.
 
 RULES:
 - Put DIRECT product page URL in "url" field when found
-- Use exact prices from search results, not estimates
-- If price not found for a shop, skip it (don't include with fake price)
+- Use exact prices from search results only
+- If price not found for a shop, skip it entirely
+- Summarize real user reviews into review_summary (2-3 sentences in Lithuanian)
 - verdict_label in Lithuanian: "Pirkti dabar" / "Palaukti" / "Vengti" / "Normalu"
 - All text fields in Lithuanian
 
 Return ONLY valid JSON (no markdown, no extra text):
-{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"","ai_summary":"","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"results":[{{"shop":"","flag":"","url":"","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search"}}]}}"""
+{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"","ai_summary":"","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"overall_rating":0,"review_count":0,"review_summary":"","review_pros":"","review_cons":"","results":[{{"shop":"","flag":"","url":"","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"review_count":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search"}}]}}"""
 
 def call_anthropic(prompt):
     messages = [{"role": "user", "content": prompt}]
