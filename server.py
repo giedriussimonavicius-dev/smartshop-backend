@@ -48,31 +48,42 @@ def rate_limit(f):
     return decorated
 
 AFFILIATE = {
+    # LT tiesioginiai pardavėjai
     "varle.lt":        "https://varle.lt/search/?q={query}",
     "pigu.lt":         "https://pigu.lt/lt/search?query={query}",
     "euronics.lt":     "https://euronics.lt/paieska?q={query}",
     "senukai.lt":      "https://senukai.lt/paieska?q={query}",
     "1a.lt":           "https://1a.lt/search?q={query}",
     "skytech.lt":      "https://skytech.lt/search?q={query}",
+    "elesen.lt":       "https://www.elesen.lt/paieska?search={query}",
+    "topocentras.lt":  "https://www.topocentras.lt/search?q={query}",
+    "rde.lt":          "https://www.rde.lt/search?q={query}",
+    "topo.lt":         "https://www.topo.lt/search/?q={query}",
+    "kilobaitas.lt":   "https://www.kilobaitas.lt/Search.aspx?SearchText={query}",
+    "bikko.com":       "https://www.bikko.com/lt/search?q={query}",
+    "fotopartneris.lt":"https://www.fotopartneris.lt/paieska?q={query}",
+    "apvaraibu.lt":    "https://www.apvaraibu.lt/search?q={query}",
+    # Tarptautiniai
     "amazon.de":       "https://www.amazon.de/s?k={query}",
     "ebay.com":        "https://www.ebay.com/sch/i.html?_nkw={query}",
-    "idealo.de":       "https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}",
-    "pricerunner.com": "https://www.pricerunner.com/search?q={query}",
-    "notino.com":      "https://www.notino.lt/search/?phrase={query}",
 }
 
 SHOPS = [
-    {"id": "varle",        "name": "Varle.lt",      "flag": "🇱🇹", "url": "varle.lt"},
+    # LT tiesioginiai pardavėjai (ne agregatoriai)
+    {"id": "varle",        "name": "Varle.lt",       "flag": "🇱🇹", "url": "varle.lt"},
     {"id": "pigu",         "name": "Pigu.lt",        "flag": "🇱🇹", "url": "pigu.lt"},
     {"id": "euronics",     "name": "Euronics",       "flag": "🇱🇹", "url": "euronics.lt"},
     {"id": "senukai",      "name": "Senukai",        "flag": "🇱🇹", "url": "senukai.lt"},
     {"id": "1a",           "name": "1a.lt",          "flag": "🇱🇹", "url": "1a.lt"},
     {"id": "skytech",      "name": "Skytech",        "flag": "🇱🇹", "url": "skytech.lt"},
-    {"id": "amazon",       "name": "Amazon",         "flag": "🌍",  "url": "amazon.de"},
+    {"id": "elesen",       "name": "Elesen.lt",      "flag": "🇱🇹", "url": "elesen.lt"},
+    {"id": "topocentras",  "name": "Topocentras",    "flag": "🇱🇹", "url": "topocentras.lt"},
+    {"id": "rde",          "name": "RDE.lt",         "flag": "🇱🇹", "url": "rde.lt"},
+    {"id": "kilobaitas",   "name": "Kilobaitas",     "flag": "🇱🇹", "url": "kilobaitas.lt"},
+    {"id": "fotopartneris","name": "Fotopartneris",  "flag": "🇱🇹", "url": "fotopartneris.lt"},
+    # Tarptautiniai
+    {"id": "amazon",       "name": "Amazon.de",      "flag": "🌍",  "url": "amazon.de"},
     {"id": "ebay",         "name": "eBay",           "flag": "🌍",  "url": "ebay.com"},
-    {"id": "idealo",       "name": "Idealo",         "flag": "🇩🇪", "url": "idealo.de"},
-    {"id": "pricerunner",  "name": "PriceRunner",    "flag": "🇸🇪", "url": "pricerunner.com"},
-    {"id": "notino",       "name": "Notino",         "flag": "🇨🇿", "url": "notino.com"},
 ]
 
 def build_affiliate_url(shop_url, query):
@@ -299,7 +310,7 @@ def scan_image():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "3.2",
+        "version": "3.3",
         "api_configured": bool(ANTHROPIC_API_KEY),
         "cache_entries": len(cache),
         "rate_store_size": len(rate_store)
@@ -314,6 +325,6 @@ def rate_limit_status():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    print(f"SmartShop API v3.2 on http://localhost:{port}")
+    print(f"SmartShop API v3.3 on http://localhost:{port}")
     print(f"API key: {'configured' if ANTHROPIC_API_KEY else 'MISSING'}")
     app.run(host="0.0.0.0", port=port, debug=True)
