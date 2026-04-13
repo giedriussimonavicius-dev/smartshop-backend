@@ -1,23 +1,32 @@
 """
-SmartShop Backend API v3.2
+SmartShop Backend API
+---------------------
+Run: python server.py
+Requires: pip install flask flask-cors anthropic python-dotenv
 """
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, json, time, hashlib, urllib.request
+import anthropic
+import os
+import json
+import time
+import hashlib
 from functools import wraps
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # Allow all origins (lock down in production)
 
+# ── CONFIG ─────────────────────────────────────────
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 DAILY_FREE_LIMIT  = int(os.getenv("DAILY_FREE_LIMIT", "10"))
-CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "1800"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "1800"))  # 30 min cache
 
+# ── SIMPLE IN-MEMORY CACHE ─────────────────────────
 cache = {}
-rate_store = {}
 
 def get_cache(key):
     if key in cache:
@@ -30,6 +39,9 @@ def get_cache(key):
 def set_cache(key, data):
     cache[key] = {"data": data, "ts": time.time()}
 
+# ── SIMPLE RATE LIMITER (IP-based) ─────────────────
+rate_store = {}  # {ip: {date: str, count: int}}
+
 def rate_limit(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -41,175 +53,256 @@ def rate_limit(f):
         if rate_store[ip]["count"] > DAILY_FREE_LIMIT:
             return jsonify({
                 "error": "daily_limit",
-                "message": f"Free limit of {DAILY_FREE_LIMIT} searches/day reached.",
+                "message": f"Free limit of {DAILY_FREE_LIMIT} searches/day reached. Upgrade for unlimited access.",
                 "remaining": 0
             }), 429
         return f(*args, **kwargs)
     return decorated
 
+# ── AFFILIATE LINK BUILDER ─────────────────────────
 AFFILIATE = {
-    # LT tiesioginiai pardavėjai
-    "varle.lt":        "https://varle.lt/search/?q={query}",
-    "pigu.lt":         "https://pigu.lt/lt/search?query={query}",
-    "euronics.lt":     "https://euronics.lt/paieska?q={query}",
-    "senukai.lt":      "https://senukai.lt/paieska?q={query}",
-    "1a.lt":           "https://1a.lt/search?q={query}",
-    "skytech.lt":      "https://skytech.lt/search?q={query}",
-    "elesen.lt":       "https://www.elesen.lt/paieska?search={query}",
-    "topocentras.lt":  "https://www.topocentras.lt/search?q={query}",
-    "rde.lt":          "https://www.rde.lt/search?q={query}",
-    "topo.lt":         "https://www.topo.lt/search/?q={query}",
-    "kilobaitas.lt":   "https://www.kilobaitas.lt/Search.aspx?SearchText={query}",
-    "bikko.com":       "https://www.bikko.com/lt/search?q={query}",
-    "fotopartneris.lt":"https://www.fotopartneris.lt/paieska?q={query}",
-    "apvaraibu.lt":    "https://www.apvaraibu.lt/search?q={query}",
-    # Tarptautiniai
-    "amazon.de":       "https://www.amazon.de/s?k={query}",
-    "ebay.com":        "https://www.ebay.com/sch/i.html?_nkw={query}",
+    "varle.lt":      {"tag": "smartshop-varle",  "pattern": "https://varle.lt/search/?q={query}&ref=smartshop"},
+    "pigu.lt":       {"tag": "smartshop-pigu",   "pattern": "https://pigu.lt/lt/search?query={query}&utm_source=smartshop"},
+    "euronics.lt":   {"tag": "smartshop-euro",   "pattern": "https://euronics.lt/paieska?q={query}"},
+    "senukai.lt":    {"tag": "smartshop-senu",   "pattern": "https://senukai.lt/search?q={query}"},
+    "1a.lt":         {"tag": "smartshop-1a",     "pattern": "https://1a.lt/search?q={query}"},
+    "amazon.de":     {"tag": "smartshop-amz",    "pattern": "https://www.amazon.de/s?k={query}&tag=smartshop-21"},
+    "ebay.com":      {"tag": "smartshop-ebay",   "pattern": "https://www.ebay.com/sch/i.html?_nkw={query}&mkcid=1&mkrid=711-53200-19255-0&campid=smartshop"},
+    "idealo.de":     {"tag": "smartshop-idea",   "pattern": "https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}"},
+    "pricerunner.com":{"tag": "smartshop-pr",    "pattern": "https://www.pricerunner.com/search?q={query}"},
 }
 
-SHOPS = [
-    # LT tiesioginiai pardavėjai (ne agregatoriai)
-    {"id": "varle",        "name": "Varle.lt",       "flag": "🇱🇹", "url": "varle.lt"},
-    {"id": "pigu",         "name": "Pigu.lt",        "flag": "🇱🇹", "url": "pigu.lt"},
-    {"id": "euronics",     "name": "Euronics",       "flag": "🇱🇹", "url": "euronics.lt"},
-    {"id": "senukai",      "name": "Senukai",        "flag": "🇱🇹", "url": "senukai.lt"},
-    {"id": "1a",           "name": "1a.lt",          "flag": "🇱🇹", "url": "1a.lt"},
-    {"id": "skytech",      "name": "Skytech",        "flag": "🇱🇹", "url": "skytech.lt"},
-    {"id": "elesen",       "name": "Elesen.lt",      "flag": "🇱🇹", "url": "elesen.lt"},
-    {"id": "topocentras",  "name": "Topocentras",    "flag": "🇱🇹", "url": "topocentras.lt"},
-    {"id": "rde",          "name": "RDE.lt",         "flag": "🇱🇹", "url": "rde.lt"},
-    {"id": "kilobaitas",   "name": "Kilobaitas",     "flag": "🇱🇹", "url": "kilobaitas.lt"},
-    {"id": "fotopartneris","name": "Fotopartneris",  "flag": "🇱🇹", "url": "fotopartneris.lt"},
-    # Tarptautiniai
-    {"id": "amazon",       "name": "Amazon.de",      "flag": "🌍",  "url": "amazon.de"},
-    {"id": "ebay",         "name": "eBay",           "flag": "🌍",  "url": "ebay.com"},
-]
-
-def build_affiliate_url(shop_url, query):
-    q = query.replace(" ", "+")
-    for key, pattern in AFFILIATE.items():
-        if key in shop_url:
-            return pattern.replace("{query}", q)
+def build_affiliate_url(shop_url: str, query: str) -> str:
+    domain = shop_url.replace("https://", "").replace("http://", "").split("/")[0]
+    for key, aff in AFFILIATE.items():
+        if key in domain:
+            return aff["pattern"].replace("{query}", query.replace(" ", "+"))
     return f"https://{shop_url}"
 
-def build_prompt(query, shops):
+# ── SHOPS LIST ─────────────────────────────────────
+SHOPS = [
+    {"id": "varle",       "name": "Varle.lt",     "flag": "🇱🇹", "url": "varle.lt"},
+    {"id": "pigu",        "name": "Pigu.lt",       "flag": "🇱🇹", "url": "pigu.lt"},
+    {"id": "euronics",    "name": "Euronics",      "flag": "🇱🇹", "url": "euronics.lt"},
+    {"id": "senukai",     "name": "Senukai",       "flag": "🇱🇹", "url": "senukai.lt"},
+    {"id": "1a",          "name": "1a.lt",         "flag": "🇱🇹", "url": "1a.lt"},
+    {"id": "skytech",     "name": "Skytech",       "flag": "🇱🇹", "url": "skytech.lt"},
+    {"id": "amazon",      "name": "Amazon",        "flag": "🌍", "url": "amazon.de"},
+    {"id": "ebay",        "name": "eBay",          "flag": "🌍", "url": "ebay.com"},
+    {"id": "idealo",      "name": "Idealo",        "flag": "🇩🇪", "url": "idealo.de"},
+    {"id": "pricerunner", "name": "PriceRunner",   "flag": "🇸🇪", "url": "pricerunner.com"},
+    {"id": "notino",      "name": "Notino",        "flag": "🇨🇿", "url": "notino.com"},
+]
+
+# ── AI PROMPT BUILDER ──────────────────────────────
+def build_prompt(query: str, shops: list) -> str:
     shop_str = ", ".join([f"{s['name']} ({s['url']})" for s in shops])
-    return f"""You are SmartShop AI — a price intelligence engine with review analysis.
+    return f"""You are SmartShop AI — a price intelligence engine for Lithuanian and European shoppers.
 
-PRODUCT: "{query}"
-SHOPS: {shop_str}
+PRODUCT TO FIND: "{query}"
+SHOPS TO CHECK: {shop_str}
 
-Use web_search to find:
-1. PRICES: Search "{query} kaina pigu.lt", "{query} price amazon.de", "{query} varle.lt kaina"
-2. REVIEWS: Search "{query} atsiliepimai", "{query} review 2024", "{query} pros cons"
-3. RATING: Find average user rating from review sites, Amazon, etc.
+Use web_search to find REAL current prices. Search for:
+- "{query} kaina pigu.lt"
+- "{query} price amazon.de"
+- "{query} varle.lt kaina"
+- "{query} best price europe"
 
-RULES:
-- Put DIRECT product page URL in "url" field when found
-- Use exact prices from search results only
-- If price not found for a shop, skip it entirely
-- Summarize real user reviews into review_summary (2-3 sentences in Lithuanian)
-- verdict_label in Lithuanian: "Pirkti dabar" / "Palaukti" / "Vengti" / "Normalu"
-- All text fields in Lithuanian
+SCORING RULES (calculate deal_score 0-100):
+- Price vs 90-day average: lower = higher score
+- Stock availability: in stock = +10
+- Delivery speed: fast = +5
+- Review score if found: good = +10
 
-Return ONLY valid JSON (no markdown, no extra text):
-{{"product_name":"","product_emoji":"","ai_verdict":"BUY|WAIT|SKIP|OK","verdict_label":"","verdict_reason":"","ai_summary":"","buy_recommendation":"","deal_score":75,"price_min":0,"price_max":0,"price_avg":0,"overall_rating":0,"review_count":0,"review_summary":"","review_pros":"","review_cons":"","results":[{{"shop":"","flag":"","url":"","price":0,"currency":"EUR","in_stock":true,"delivery":"","deal_score":80,"rating":0,"review_count":0,"notes":"","is_best_value":false,"is_cheapest":false,"is_top_rated":false,"why_recommended":"","source":"web_search"}}]}}"""
+VERDICT RULES:
+- BUY: price is at/near historical low, good availability
+- WAIT: price likely to drop (seasonal pattern, recently increased)
+- SKIP: significantly overpriced vs alternatives
+- OK: average market price, no strong signal
 
-def call_anthropic(prompt):
-    messages = [{"role": "user", "content": prompt}]
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-    }
+Return ONLY this JSON (no markdown, no preamble):
+{{
+  "product_name": "exact product name",
+  "product_emoji": "single emoji",
+  "category": "category",
+  "ai_verdict": "BUY|WAIT|SKIP|OK",
+  "verdict_label": "Pirkti dabar|Palaukti|Vengti|Normalu",
+  "verdict_reason": "1-2 sentence explanation in Lithuanian",
+  "ai_summary": "3-4 sentence detailed analysis in Lithuanian",
+  "buy_recommendation": "specific recommendation in Lithuanian",
+  "deal_score": 75,
+  "price_min": 0,
+  "price_max": 0,
+  "price_avg": 0,
+  "price_history_note": "historical context",
+  "results": [
+    {{
+      "shop": "Shop name",
+      "shop_id": "id",
+      "flag": "🇱🇹",
+      "url": "shop.lt/product-url",
+      "price": 0,
+      "currency": "EUR",
+      "in_stock": true,
+      "delivery": "1-2 d.d.",
+      "deal_score": 85,
+      "rating": 4.5,
+      "review_count": 0,
+      "notes": "short note about this offer",
+      "is_best_value": false,
+      "is_cheapest": false,
+      "is_top_rated": false,
+      "why_recommended": "brief reason",
+      "source": "web_search"
+    }}
+  ]
+}}
 
-    def do_request(msgs, timeout):
-        payload = json.dumps({
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 4000,
-            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-            "messages": msgs
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload, headers=headers, method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8"))
+Mark is_cheapest=true for lowest price, is_best_value=true for best price/quality ratio, is_top_rated=true for highest rating.
+Use source="estimated" if price not found. JSON ONLY."""
 
-    data = do_request(messages, 60)
 
-    if data.get("stop_reason") == "tool_use":
+def run_search(query: str, shop_ids: list) -> dict:
+    """Bendra paieškos funkcija — naudojama tiek /search, tiek /scan-image."""
+    cache_key = hashlib.md5(f"{query}:{sorted(shop_ids)}".encode()).hexdigest()
+    cached = get_cache(cache_key)
+    if cached:
+        cached["_cached"] = True
+        return cached
+
+    shops = [s for s in SHOPS if s["id"] in shop_ids] or SHOPS
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    prompt = build_prompt(query, shops)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4000,
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=[{"role": "user", "content": prompt}]
+    )
+    if response.stop_reason == "tool_use":
         tool_results = [
-            {"type": "tool_result", "tool_use_id": b["id"], "content": "Search completed."}
-            for b in data["content"] if b.get("type") == "tool_use"
+            {"type": "tool_result", "tool_use_id": b.id, "content": "Search completed."}
+            for b in response.content if b.type == "tool_use"
         ]
-        messages.append({"role": "assistant", "content": data["content"]})
-        messages.append({"role": "user", "content": tool_results})
-        data = do_request(messages, 90)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": response.content},
+                {"role": "user", "content": tool_results}
+            ]
+        )
+    text = "".join(b.text for b in response.content if hasattr(b, "text"))
+    result = parse_ai_response(text, query)
+    result = post_process(result, query)
+    set_cache(cache_key, result)
+    return result
 
-    return "".join(
-        b.get("text", "") for b in data.get("content", [])
-        if b.get("type") == "text"
-    )
 
-def call_anthropic_vision(image_b64):
-    """Dedicated vision call for image analysis."""
-    prompt_text = """Analyze this image carefully and identify:
+# ── MAIN SEARCH ENDPOINT ───────────────────────────
+@app.route("/api/search", methods=["POST"])
+@rate_limit
+def search():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data"}), 400
 
-1. PRODUCT: What product/item is shown? Give exact brand, model, name.
-2. PRICE TAG: Is there any price label, price sticker, or price display visible?
-   - If YES: What is the EXACT price shown? (numbers only, e.g. 299.99)
-   - If NO: Return 0 for price_visible
-3. BARCODE: Is there a barcode or QR code? If yes, what number is shown?
+    query = data.get("query", "").strip()
+    shop_ids = data.get("shops", [s["id"] for s in SHOPS])
 
-Be very precise. Do NOT guess prices. Only report prices you can clearly see.
+    if not query:
+        return jsonify({"error": "Query required"}), 400
+    if len(query) > 200:
+        return jsonify({"error": "Query too long"}), 400
 
-Return ONLY this JSON:
-{"product_name":"exact brand and model","price_visible":0,"barcode":"","brand":"","model":"","context":"what you see in the image"}
+    # Check cache
+    cache_key = hashlib.md5(f"{query}:{sorted(shop_ids)}".encode()).hexdigest()
+    cached = get_cache(cache_key)
+    if cached:
+        cached["_cached"] = True
+        return jsonify(cached)
 
-Rules:
-- price_visible must be 0 if no price is clearly visible
-- price_visible must be the exact number shown if a price label is visible
-- Do not hallucinate prices"""
+    # Get shops to search
+    shops = [s for s in SHOPS if s["id"] in shop_ids]
+    if not shops:
+        shops = SHOPS
 
-    payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 500,
-        "messages": [{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
-            {"type": "text", "text": prompt_text}
-        ]}]
-    }).encode("utf-8")
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"error": "Server not configured", "message": "API key missing on server"}), 500
 
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read().decode("utf-8"))
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    prompt = build_prompt(query, shops)
 
-    return "".join(b.get("text","") for b in data.get("content",[]) if b.get("type")=="text")
+    try:
+        # First call with web search tool
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": prompt}]
+        )
 
-def parse_response(text, query):
+        # If tool use, continue conversation
+        if response.stop_reason == "tool_use":
+            tool_results = [
+                {"type": "tool_result", "tool_use_id": b.id, "content": "Search completed."}
+                for b in response.content if b.type == "tool_use"
+            ]
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": response.content},
+                    {"role": "user", "content": tool_results}
+                ]
+            )
+
+        # Extract text
+        text = "".join(b.text for b in response.content if hasattr(b, "text"))
+
+        # Parse JSON
+        result = parse_ai_response(text, query)
+
+        # Post-process: add affiliate links, sort, mark labels
+        result = post_process(result, query)
+
+        # Cache result
+        set_cache(cache_key, result)
+
+        # Add rate limit info
+        ip = request.remote_addr or "unknown"
+        today = time.strftime("%Y-%m-%d")
+        used = rate_store.get(ip, {}).get("count", 1)
+        result["_rate"] = {"used": used, "limit": DAILY_FREE_LIMIT, "remaining": max(0, DAILY_FREE_LIMIT - used)}
+
+        return jsonify(result)
+
+    except anthropic.APIError as e:
+        return jsonify({"error": "api_error", "message": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
+def parse_ai_response(text: str, query: str) -> dict:
+    """Extract and parse JSON from AI response."""
     s = text.strip()
+    # Remove markdown fences
     for fence in ["```json", "```"]:
         s = s.replace(fence, "")
     s = s.strip()
+    # Find JSON boundaries
     start = s.find("{")
     end = s.rfind("}")
     if start != -1 and end != -1:
         s = s[start:end+1]
     try:
         return json.loads(s)
-    except:
+    except json.JSONDecodeError:
         return {
             "product_name": query,
             "product_emoji": "📦",
@@ -224,68 +317,47 @@ def parse_response(text, query):
             "price_avg": 0
         }
 
-def post_process(data, query):
+
+def post_process(data: dict, query: str) -> dict:
+    """Sort results, add affiliate links, calculate scores."""
     results = [r for r in data.get("results", []) if r.get("price", 0) > 0]
+
     if not results:
         return data
+
+    # Sort by price
     results.sort(key=lambda x: x.get("price", 0))
+
     prices = [r["price"] for r in results]
     data["price_min"] = min(prices)
     data["price_max"] = max(prices)
     data["price_avg"] = round(sum(prices) / len(prices))
+
+    # Mark labels
     for i, r in enumerate(results):
         r["is_cheapest"] = (i == 0)
         r["is_worst"] = (i == len(results) - 1)
-    best_idx = max(range(len(results)), key=lambda i: results[i].get("deal_score", 0))
-    results[best_idx]["is_best_value"] = True
+
+    # Best value = best deal_score (or cheapest if no scores)
+    best_score_idx = max(range(len(results)), key=lambda i: results[i].get("deal_score", 0))
+    results[best_score_idx]["is_best_value"] = True
+
+    # Top rated = highest rating
     rated = [r for r in results if r.get("rating", 0) > 0]
     if rated:
-        max(rated, key=lambda r: r.get("rating", 0))["is_top_rated"] = True
+        top = max(rated, key=lambda r: r.get("rating", 0))
+        top["is_top_rated"] = True
+
+    # Add affiliate links
     for r in results:
         url = r.get("url", r.get("shop", ""))
         r["affiliate_url"] = build_affiliate_url(url, query)
+
     data["results"] = results
     return data
 
-@app.route("/api/search", methods=["POST"])
-@rate_limit
-def search():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data"}), 400
-    query = data.get("query", "").strip()
-    shop_ids = data.get("shops", [s["id"] for s in SHOPS])
-    if not query:
-        return jsonify({"error": "Query required"}), 400
 
-    cache_key = hashlib.md5(f"{query}:{sorted(shop_ids)}".encode()).hexdigest()
-    cached = get_cache(cache_key)
-    if cached:
-        cached["_cached"] = True
-        return jsonify(cached)
-
-    shops = [s for s in SHOPS if s["id"] in shop_ids] or SHOPS
-    if not ANTHROPIC_API_KEY:
-        return jsonify({"error": "Server not configured"}), 500
-
-    try:
-        text = call_anthropic(build_prompt(query, shops))
-        result = parse_response(text, query)
-        result = post_process(result, query)
-        set_cache(cache_key, result)
-
-        ip = request.remote_addr or "unknown"
-        today = time.strftime("%Y-%m-%d")
-        used = rate_store.get(ip, {}).get("count", 1)
-        result["_rate"] = {
-            "used": used,
-            "limit": DAILY_FREE_LIMIT,
-            "remaining": max(0, DAILY_FREE_LIMIT - used)
-        }
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": "server_error", "message": str(e)}), 500
-
+# ── IMAGE RECOGNITION ENDPOINT ────────────────────
 @app.route("/api/scan-image", methods=["POST"])
 @rate_limit
 def scan_image():
@@ -293,38 +365,116 @@ def scan_image():
     if not data or "image" not in data:
         return jsonify({"error": "No image"}), 400
 
+    b64 = data["image"]
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
     try:
-        text = call_anthropic_vision(data["image"])
-        result = parse_response(text, "")
+        # 1. Atpažinti produktą iš nuotraukos
+        vision_prompt = """Analyze this image carefully.
+1. PRODUCT: Exact brand + model number (e.g. "Samsung QE75QN80FAUXXH")
+2. PRICE TAG: Exact price shown (number only, 0 if not visible)
+3. BARCODE: Number if visible
 
-        # Validate price - only return if clearly visible (> 1 and reasonable)
-        price = result.get("price_visible", 0)
-        if isinstance(price, (int, float)) and price <= 1:
-            result["price_visible"] = 0
+Return ONLY valid JSON, no markdown:
+{"product_name":"exact brand and model","price_visible":0,"barcode":"","brand":"","model":"","context":"brief description"}"""
 
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
+                    {"type": "text", "text": vision_prompt}
+                ]
+            }]
+        )
+        text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        vision_result = parse_ai_response(text, "")
+
+        product_name = vision_result.get("product_name", "").strip()
+        price_visible = vision_result.get("price_visible", 0)
+        if isinstance(price_visible, (int, float)) and price_visible <= 1:
+            price_visible = 0
+
+        if not product_name or product_name.lower() in ["", "unknown", "nežinoma"]:
+            return jsonify({"error": "product_not_recognized", "message": "Nepavyko atpažinti produkto"}), 400
+
+        # 2. Ieškoti kainų pagal atpažintą produktą
+        shop_ids = data.get("shops", [s["id"] for s in SHOPS])
+
+        # Patikrinti cache
+        cache_key = hashlib.md5(f"scan:{product_name}:{sorted(shop_ids)}".encode()).hexdigest()
+        cached = get_cache(cache_key)
+        if cached:
+            cached["_cached"] = True
+            cached["scanned_product"] = product_name
+            cached["store_price"] = price_visible
+            return jsonify(cached)
+
+        result = run_search(product_name, shop_ids)
+
+        result["scanned_product"] = product_name
+        result["store_price"] = price_visible
+
+        # Pridėti parduotuvės kainą iš nuotraukos
+        if price_visible > 1:
+            store_entry = {
+                "shop": "📷 Nuskaitytas",
+                "flag": "📷",
+                "price": price_visible,
+                "currency": "EUR",
+                "in_stock": True,
+                "delivery": "Fizinė parduotuvė",
+                "deal_score": 50,
+                "is_cheapest": False,
+                "is_best_value": False,
+                "is_top_rated": False,
+                "notes": "Kaina iš jūsų nuotraukos",
+                "source": "scan"
+            }
+            result.setdefault("results", []).insert(0, store_entry)
+            result = post_process(result, product_name)
+
+        set_cache(cache_key, result)
+
+        ip = request.remote_addr or "unknown"
+        used = rate_store.get(ip, {}).get("count", 1)
+        result["_rate"] = {"used": used, "limit": DAILY_FREE_LIMIT, "remaining": max(0, DAILY_FREE_LIMIT - used)}
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# ── HEALTH CHECK ──────────────────────────────────
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
-        "version": "3.3",
+        "version": "3.0",
         "api_configured": bool(ANTHROPIC_API_KEY),
         "cache_entries": len(cache),
         "rate_store_size": len(rate_store)
     })
 
+
+# ── RATE LIMIT STATUS ─────────────────────────────
 @app.route("/api/rate-limit", methods=["GET"])
 def rate_limit_status():
     ip = request.remote_addr or "unknown"
     today = time.strftime("%Y-%m-%d")
     used = rate_store.get(ip, {}).get("count", 0) if rate_store.get(ip, {}).get("date") == today else 0
-    return jsonify({"used": used, "limit": DAILY_FREE_LIMIT, "remaining": max(0, DAILY_FREE_LIMIT - used)})
+    return jsonify({
+        "used": used,
+        "limit": DAILY_FREE_LIMIT,
+        "remaining": max(0, DAILY_FREE_LIMIT - used)
+    })
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    print(f"SmartShop API v3.3 on http://localhost:{port}")
-    print(f"API key: {'configured' if ANTHROPIC_API_KEY else 'MISSING'}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    debug = os.getenv("DEBUG", "true").lower() == "true"
+    print(f"🚀 SmartShop API running on http://localhost:{port}")
+    print(f"   API key: {'✓ configured' if ANTHROPIC_API_KEY else '✗ MISSING — set ANTHROPIC_API_KEY in .env'}")
+    print(f"   Free limit: {DAILY_FREE_LIMIT} searches/day/IP")
+    app.run(host="0.0.0.0", port=port, debug=debug)
